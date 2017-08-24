@@ -11,13 +11,12 @@ Independent parameters
 """
 par = {
     # Setup parameters
-    'save_dir'              : 'C:/Users/nicol/Projects/RNN STP Analysis/',
+    'save_dir'              : './savedir/',
     'debug_model'           : False,
     'load_previous_model'   : False,
     'analyze_model'         : False,
 
     # Network configuration
-    'synapse_config'        : 'std_stf', # Full is 'std_stf'
     'exc_inh_prop'          : 0.8,       # Literature 0.8, for EI off 1
     'var_delay'             : False,
     'catch_trials'          : False,     # Note that turning on var_delay implies catch_trials
@@ -26,11 +25,12 @@ par = {
     'num_motion_tuned'      : 36,
     'num_fix_tuned'         : 0,
     'num_rule_tuned'        : 0,
-    'n_hidden'              : 200,
+    'n_hidden'              : 40,
+    'n_reflect'             : 39,
     'n_output'              : 3,
 
     # Timings and rates
-    'dt'                    : 10,
+    'dt'                    : 20,
     'learning_rate'         : 5e-3,
     'membrane_time_constant': 100,
     'connection_prob'       : 1,         # Usually 1
@@ -39,7 +39,7 @@ par = {
     'clip_max_grad_val'     : 0.25,
     'input_mean'            : 0.0,
     'noise_in_sd'           : 0.01,
-    'noise_rnn_sd'          : 0.5,
+    'noise_rnn_sd'          : 0.25,
 
     # Tuning function data
     'num_motion_dirs'       : 8,
@@ -47,13 +47,7 @@ par = {
     'kappa'                 : 2,        # concentration scaling factor for von Mises
 
     # Cost parameters
-    'spike_cost'            : 0.01,
-
-    # Synaptic plasticity specs
-    'tau_fast'              : 200,
-    'tau_slow'              : 1500,
-    'U_stf'                 : 0.15,
-    'U_std'                 : 0.45,
+    'spike_cost'            : 1e-6,
 
     # Performance thresholds
     'stop_perf_th'          : 0.99,
@@ -62,17 +56,17 @@ par = {
     # Training specs
     'batch_train_size'      : 128,
     'num_batches'           : 8,
-    'num_iterations'        : 1500,
-    'iters_between_outputs' : 100,
+    'num_iterations'        : 20,
+    'iters_between_outputs' : 10,
 
     # Task specs
     'trial_type'            : 'DMS', # allowable types: DMS, DMRS45, DMRS90, DMRS180, DMC, DMS+DMRS, ABBA, ABCA, dualDMS
     'rotation_match'        : 0,  # angular difference between matching sample and test
-    'dead_time'             : 400,
-    'fix_time'              : 500,
-    'sample_time'           : 500,
-    'delay_time'            : 1000,
-    'test_time'             : 500,
+    'dead_time'             : 100,
+    'fix_time'              : 100,
+    'sample_time'           : 200,
+    'delay_time'            : 400,
+    'test_time'             : 200,
     'rule_onset_time'       : 1900,
     'rule_offset_time'      : 2100,
     'variable_delay_max'    : 500,
@@ -97,7 +91,7 @@ analysis_par = {
     'num_batches'           : 1,
     'batch_train_size'      : 1024*2,
     'var_delay'             : False,
-    'dt'                    : 10,
+    'dt'                    : 20,
     'learning_rate'         : 0,
     'catch_trial_pct'       : 0,
 }
@@ -109,10 +103,10 @@ revert_analysis_par = {
     'analyze_model'         : False,
     'load_previous_model'   : False,
     'num_iterations'        : 1500,
-    'num_batches'           : 8,
-    'batch_train_size'      : 128,
+    'num_batches'           : 32,
+    'batch_train_size'      : 32,
     'var_delay'             : True,
-    'dt'                    : 10,
+    'dt'                    : 20,
     'learning_rate'         : 5e-3,
     'catch_trial_pct'       : 0.15,
     'delay_time'            : 1000
@@ -204,24 +198,7 @@ def update_dependencies():
     # General network shape
     par['shape'] = (par['n_input'], par['n_hidden'], par['n_output'])
 
-    # Possible rules based on rule type values
-    #par['possible_rules'] = [par['num_receptive_fields'], par['num_categorizations']]
 
-    # If num_inh_units is set > 0, then neurons can be either excitatory or
-    # inihibitory; is num_inh_units = 0, then the weights projecting from
-    # a single neuron can be a mixture of excitatory or inhibitory
-    if par['exc_inh_prop'] < 1:
-        par['EI'] = True
-    else:
-        par['EI']  = False
-
-    par['num_exc_units'] = int(np.round(par['n_hidden']*par['exc_inh_prop']))
-    par['num_inh_units'] = par['n_hidden'] - par['num_exc_units']
-
-    par['EI_list'] = np.ones(par['n_hidden'], dtype=np.float32)
-    par['EI_list'][-par['num_inh_units']:] = -1.
-
-    par['EI_matrix'] = np.diag(par['EI_list'])
 
     # Membrane time constant of RNN neurons
     par['alpha_neuron'] = par['dt']/par['membrane_time_constant']
@@ -251,119 +228,23 @@ def update_dependencies():
     ####################################################################
 
     par['h_init'] = 0.1*np.ones((par['n_hidden'], par['batch_train_size']), dtype=np.float32)
+    sd = 0.1
 
-    par['input_to_hidden_dims'] = [par['n_hidden'], par['n_input']]
-    par['hidden_to_hidden_dims'] = [par['n_hidden'], par['n_hidden']]
+    par['u0'] = np.tril(np.random.normal(0, sd, (par['n_hidden'], par['n_reflect'])))
+    norms = np.linalg.norm(par['u0'], axis=0)
+    par['u0'] = np.float32(1/norms*par['u0'])
 
-
-    # Initialize input weights
-    par['w_in0'] = initialize(par['input_to_hidden_dims'], par['connection_prob'])
-
-    # Initialize starting recurrent weights
-    # If excitatory/inhibitory neurons desired, initializes with random matrix with
-    #   zeroes on the diagonal
-    # If not, initializes with a diagonal matrix
-    if par['EI']:
-        par['w_rnn0'] = initialize(par['hidden_to_hidden_dims'], par['connection_prob'])
-
-        ring_exc = np.exp(1j*2*np.pi*np.arange(par['num_exc_units'])/par['num_exc_units'])
-        ring_inh = np.exp(1j*2*np.pi*np.arange(par['num_inh_units'])/par['num_inh_units'])
-        for n1 in range(par['n_hidden']):
-            for n2 in range(par['n_hidden']):
-                if par['EI_list'][n1] == 1:
-                    r1 = ring_exc[n1]
-                else:
-                    r1 = ring_inh[n1-par['num_exc_units']]
-                if par['EI_list'][n2] == 1:
-                    r2 = ring_exc[n2]
-                else:
-                    r2 = ring_inh[n2-par['num_exc_units']]
-
-                connect_prob = np.real(r1*np.conjugate(r2))
-                if np.random.rand() < connect_prob:
-                    par['w_rnn0'][n2,n1] = np.random.gamma(shape=0.25, scale=1.0)
-
-
-        for i in range(par['n_hidden']):
-            par['w_rnn0'][i,i] = 0
-        par['w_rnn_mask'] = np.ones((par['hidden_to_hidden_dims']), dtype=np.float32) - np.eye(par['n_hidden'])
-    else:
-        par['w_rnn0'] = np.eye(par['n_hidden'])
-        par['w_rnn_mask'] = np.ones((par['hidden_to_hidden_dims']), dtype=np.float32)
-
+    par['w_in0'] = np.float32(np.random.normal(0, sd, (par['n_hidden'], par['n_input'])))
+    par['w_out0'] = np.float32(np.random.normal(0, sd, (par['n_output'], par['n_hidden'])))
     par['b_rnn0'] = np.zeros((par['n_hidden'], 1), dtype=np.float32)
-
-    # Effective synaptic weights are stronger when no short-term synaptic plasticity
-    # is used, so the strength of the recurrent weights is reduced to compensate
-    if par['synapse_config'] == None:
-        par['w_rnn0'] = par['w_rnn0']/(2*spectral_radius(par['w_rnn0']))
-
-    # Initialize output weights and biases
-    par['w_out0'] =initialize([par['n_output'], par['n_hidden']], par['connection_prob'])
     par['b_out0'] = np.zeros((par['n_output'], 1), dtype=np.float32)
-    par['w_out_mask'] = np.ones((par['n_output'], par['n_hidden']), dtype=np.float32)
 
-    if par['EI']:
-        par['ind_inh'] = np.where(par['EI_list'] == -1)[0]
-        par['w_out0'][:, par['ind_inh']] = 0
-        par['w_out_mask'][:, par['ind_inh']] = 0
+    # used to calculate WY
+    par['triu'] =  np.triu(np.ones((par['n_reflect'], par['n_reflect']), dtype=np.float32), 1)
+    par['diag'] =  np.eye((par['n_reflect']), dtype=np.float32)
 
-    """
-    Setting up synaptic parameters
-    0 = static
-    1 = facilitating
-    2 = depressing
-    """
+    par['u_mask'] = np.tril(np.ones((par['n_hidden'], par['n_reflect']), dtype=np.float32))
 
-
-    par['synapse_type'] = np.zeros(par['n_hidden'], dtype=np.int8)
-
-    # only facilitating synapses
-    if par['synapse_config'] == 'stf':
-        par['synapse_type'] = np.ones(par['n_hidden'], dtype=np.int8)
-
-    # only depressing synapses
-    elif par['synapse_config'] == 'std':
-        par['synapse_type'] = 2*np.ones(par['n_hidden'], dtype=np.int8)
-
-    # even numbers facilitating, odd numbers depressing
-    elif par['synapse_config'] == 'std_stf':
-        par['synapse_type'] = np.ones(par['n_hidden'], dtype=np.int8)
-        par['ind'] = range(1,par['n_hidden'],2)
-        par['synapse_type'][par['ind']] = 2
-
-    par['alpha_stf'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
-    par['alpha_std'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
-    par['U'] = np.ones((par['n_hidden'], 1), dtype=np.float32)
-
-    # initial synaptic values
-    par['syn_x_init'] = np.zeros((par['n_hidden'], par['batch_train_size']), dtype=np.float32)
-    par['syn_u_init'] = np.zeros((par['n_hidden'], par['batch_train_size']), dtype=np.float32)
-
-    for i in range(par['n_hidden']):
-        if par['synapse_type'][i] == 1:
-            par['alpha_stf'][i,0] = par['dt']/par['tau_slow']
-            par['alpha_std'][i,0] = par['dt']/par['tau_fast']
-            par['U'][i,0] = 0.15
-            par['syn_x_init'][i,:] = 1
-            par['syn_u_init'][i,:] = par['U'][i,0]
-
-        elif par['synapse_type'][i] == 2:
-            par['alpha_stf'][i,0] = par['dt']/par['tau_fast']
-            par['alpha_std'][i,0] = par['dt']/par['tau_slow']
-            par['U'][i,0] = 0.45
-            par['syn_x_init'][i,:] = 1
-            par['syn_u_init'][i,:] = par['U'][i,0]
-
-def initialize(dims, connection_prob):
-    w = np.random.gamma(shape=0.25, scale=1.0, size=dims)
-    w *= (np.random.rand(*dims) < connection_prob)
-    return np.float32(w)
-
-
-def spectral_radius(A):
-
-    return np.max(abs(np.linalg.eigvals(A)))
 
 update_trial_params()
 update_dependencies()

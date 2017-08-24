@@ -8,49 +8,36 @@ from sklearn import svm
 import time
 import pickle
 
-def analyze_model(trial_info, y_hat, h, syn_x, syn_u, model_performance, weights):
+def analyze_model(trial_info, y_hat, h, model_performance, weights):
 
     """
     Converts neuronal and synaptic values, stored in lists, into 3D arrays
     Creating new variable since h, syn_x, and syn_u are class members of model.py,
     and will get mofiied by functions within analysis.py
     """
-    syn_x_stacked = np.stack(syn_x, axis=1)
-    syn_u_stacked = np.stack(syn_u, axis=1)
     h_stacked = np.stack(h, axis=1)
-
-    """
-    Calculate the neuronal and synaptic contributions towards solving the task
-    """
-    accuracy, accuracy_neural_shuffled, accuracy_syn_shuffled = \
-        simulate_network(trial_info, h_stacked, syn_x_stacked, syn_u_stacked, weights, num_reps = 100)
+    trial_time = np.arange(0,h_stacked.shape[1]*par['dt'], par['dt'])
 
     """
     Lesion weights
     """
-    #print('Lesioning weights...')
-    #accuracy_rnn_start, accuracy_rnn_test, accuracy_out = lesion_weights(trial_info, h_stacked, syn_x_stacked, syn_u_stacked, weights)
-
-    """
-    Downsample neural activity in order to speed up decoding and tuning calculations
-    """
-    h_stacked, syn_x_stacked, syn_u_stacked, trial_time = downsample_activity(h_stacked, syn_x_stacked, syn_u_stacked, target_dt = 20)
-
+    print('Lesioning weights...')
+    accuracy_rnn_start, accuracy_rnn_test, accuracy_out = lesion_weights(trial_info, h_stacked, weights)
 
     """
     Calculate neuronal and synaptic sample motion tuning
     """
     print('Calculating motion direction tuning...')
-    neuronal_pref_dir, neuronal_pev, synaptic_pref_dir, synaptic_pev = calculate_sample_tuning(h_stacked, \
-        syn_x_stacked, syn_u_stacked, trial_info['sample'], trial_info['rule'], trial_info['match'], trial_time)
+    neuronal_pref_dir, neuronal_pev = calculate_sample_tuning(h_stacked, \
+        trial_info['sample'], trial_info['rule'], trial_info['match'], trial_time)
 
 
     """
     Decode the sample direction from neuronal activity and synaptic efficacies
     using support vector machhines
     """
-    neuronal_decoding, synaptic_decoding = calculate_svms(h_stacked, syn_x_stacked, syn_u_stacked, trial_info['sample'], \
-        trial_info['rule'], trial_info['match'], trial_time, num_reps = 100)
+    neuronal_decoding = calculate_svms(h_stacked, trial_info['sample'], \
+        trial_info['rule'], trial_info['match'], trial_time, num_reps = 5)
 
 
 
@@ -59,14 +46,8 @@ def analyze_model(trial_info, y_hat, h, syn_x, syn_u, model_performance, weights
     """
     results = {
         'neuronal_decoding': neuronal_decoding,
-        'synaptic_decoding': synaptic_decoding,
         'neuronal_pref_dir': neuronal_pref_dir,
         'neuronal_pev': neuronal_pev,
-        'synaptic_pref_dir': synaptic_pref_dir,
-        'synaptic_pev': synaptic_pev,
-        'accuracy': accuracy,
-        'accuracy_neural_shuffled': accuracy_neural_shuffled,
-        'accuracy_syn_shuffled': accuracy_syn_shuffled,
         'model_performance': model_performance,
         'parameters': par,
         'weights': weights,
@@ -76,7 +57,7 @@ def analyze_model(trial_info, y_hat, h, syn_x, syn_u, model_performance, weights
     pickle.dump(results, open(save_fn, 'wb') )
     print('Analysis results saved in ', save_fn)
 
-def calculate_svms(h, syn_x, syn_u, sample, rule, match, trial_time, num_reps = 20):
+def calculate_svms(h, sample, rule, match, trial_time, num_reps = 20):
 
     """
     Calculates neuronal and synaptic decoding accuracies uisng support vector machines
@@ -88,13 +69,6 @@ def calculate_svms(h, syn_x, syn_u, sample, rule, match, trial_time, num_reps = 
 
     num_time_steps = len(trial_time)
     neuronal_decoding = np.zeros((par['num_rules'], num_time_steps, num_reps))
-    synaptic_decoding = np.zeros((par['num_rules'], num_time_steps, num_reps))
-
-    """
-    The synaptic efficacy is the product of syn_x and syn_u, will decode sample
-    direction from this value
-    """
-    syn_efficacy = syn_x*syn_u
 
     if par['trial_type'] == 'DMC':
         """
@@ -113,15 +87,14 @@ def calculate_svms(h, syn_x, syn_u, sample, rule, match, trial_time, num_reps = 
         sample = sample[ind]
         rule = rule[ind]
         h = h[:,:,ind]
-        syn_efficacy = syn_efficacy[:,:,ind]
 
     # number of unique samples
     N = len(np.unique(sample))
-    neuronal_decoding, synaptic_decoding = svm_wraper(lin_clf, h, syn_efficacy, sample, rule, num_reps, N, trial_time)
+    neuronal_decoding = svm_wraper(lin_clf, h, sample, rule, num_reps, N, trial_time)
 
-    return neuronal_decoding, synaptic_decoding
+    return neuronal_decoding
 
-def svm_wraper(lin_clf, h, syn_eff, conds, rule, num_reps, num_conds, trial_time):
+def svm_wraper(lin_clf, h, conds, rule, num_reps, num_conds, trial_time):
 
     """
     Wraper function used to decode sample direction from hidden activity (h)
@@ -136,7 +109,6 @@ def svm_wraper(lin_clf, h, syn_eff, conds, rule, num_reps, num_conds, trial_time
         par['num_rules'] = 4
 
     score_h = np.zeros((par['num_rules'], par['num_receptive_fields'], num_reps, num_time_steps))
-    score_syn_eff = np.zeros((par['num_rules'], par['num_receptive_fields'], num_reps, num_time_steps))
 
     for r in range(par['num_rules']):
         ind_rule = np.where(rule==r)[0]
@@ -172,12 +144,10 @@ def svm_wraper(lin_clf, h, syn_eff, conds, rule, num_reps, num_conds, trial_time
                         continue
 
                     score_h[r,n,rep,t] = calc_svm(lin_clf, h[:,t,:].T, current_conds, equal_train_ind, equal_test_ind)
-                    score_syn_eff[r,n,rep,t] = calc_svm(lin_clf, syn_eff[:,t,:].T, current_conds, equal_train_ind, equal_test_ind)
 
     score_h = np.squeeze(score_h)
-    score_syn_eff = np.squeeze(score_syn_eff)
 
-    return score_h, score_syn_eff
+    return score_h
 
 
 
@@ -209,7 +179,7 @@ def calc_svm(lin_clf, y, conds, train_ind, test_ind):
     return score
 
 
-def lesion_weights(trial_info, h, syn_x, syn_u, weights):
+def lesion_weights(trial_info, h, weights):
 
     N = weights['w_rnn'].shape[0]
     num_reps = 10
@@ -232,13 +202,11 @@ def lesion_weights(trial_info, h, syn_x, syn_u, weights):
 
     test_onset = 1
     hidden_init = h[:,test_onset-1,:]
-    syn_x_init = syn_x[:,test_onset-1,:]
-    syn_u_init = syn_u[:,test_onset-1,:]
+
 
     test_onset = (par['dead_time']+par['fix_time']+par['sample_time']+par['delay_time'])//par['dt']
     hidden_init_test = h[:,test_onset-1,:]
-    syn_x_init_test = syn_x[:,test_onset-1,:]
-    syn_u_init_test = syn_u[:,test_onset-1,:]
+
 
     x_test = np.split(trial_info['neural_input'][:,test_onset:,:],trial_length-test_onset,axis=1)
     y_test = trial_info['desired_output'][:,test_onset:,:]
@@ -262,7 +230,7 @@ def lesion_weights(trial_info, h, syn_x, syn_u, weights):
             weights_new['w_out'] = weights['w_out']*q
 
             # simulate network
-            y_hat, hidden_state_hist = run_model(x_test, y_test, hidden_init_test, syn_x_init_test, syn_u_init_test, weights_new)
+            y_hat, hidden_state_hist = run_model(x_test, y_test, hidden_init_test, weights_new)
             accuracy_out[n1,n2] = get_perf(y_test, y_hat, train_mask_test)
 
     for n1 in range(N):
@@ -277,33 +245,27 @@ def lesion_weights(trial_info, h, syn_x, syn_u, weights):
             weights_new['w_rnn'] = weights['w_rnn']*q
 
             # simulate network
-            y_hat, hidden_state_hist = run_model(x, y, hidden_init, syn_x, syn_u, weights_new)
+            y_hat, hidden_state_hist = run_model(x, y, hidden_init, weights_new)
             accuracy_rnn_start[n1,n2] = get_perf(y, y_hat, train_mask)
 
-            y_hat, hidden_state_hist = run_model(x_test, y_test, hidden_init_test, syn_x_init_test, syn_u_init_test, weights_new)
+            y_hat, hidden_state_hist = run_model(x_test, y_test, hidden_init_test, weights_new)
             accuracy_rnn_test[n1,n2] = get_perf(y_test, y_hat, train_mask_test)
 
             if accuracy_rnn_start[n1,n2] < -1:
 
                 h_stacked = np.stack(hidden_state_hist, axis=1)
 
-                neuronal_decoding[n1,n2,:,:,:], _ = calculate_svms(h_stacked, syn_x, syn_u, trial_info['sample'], \
+                neuronal_decoding[n1,n2,:,:,:], _ = calculate_svms(h_stacked, trial_info['sample'], \
                     trial_info['rule'], trial_info['match'], trial_time, num_reps = num_reps)
 
                 neuronal_pref_dir[n1,n2,:,:], neuronal_pev[n1,n2,:,:], _, _ = calculate_sample_tuning(h_stacked, \
-                    syn_x, syn_u, trial_info['sample'], trial_info['rule'], trial_info['match'], trial_time)
+                    trial_info['sample'], trial_info['rule'], trial_info['match'], trial_time)
 
-            """
-            y_hat_test = run_model(x_test, y_test, hidden_init_test, syn_x_init_test, syn_u_init_test, weights_new)
-            accuracy_test[n1,n2] = get_perf(y_test, y_hat_test, train_mask_test)
-            """
 
     return accuracy_rnn_start, accuracy_rnn_test, accuracy_out
 
 
-
-
-def simulate_network(trial_info, h, syn_x, syn_u, weights, num_reps = 20):
+def simulate_network(trial_info, h, weights, num_reps = 20):
 
     """
     Simulation will start from the start of the test period until the end of trial
@@ -364,22 +326,14 @@ def simulate_network(trial_info, h, syn_x, syn_u, weights, num_reps = 20):
 
     return accuracy, accuracy_neural_shuffled, accuracy_syn_shuffled
 
-def calculate_sample_tuning(h, syn_x, syn_u, sample, rule, match, trial_time):
+def calculate_sample_tuning(h, sample, rule, match, trial_time):
 
     """
     Calculates neuronal and synaptic sample motion direction tuning
     """
     num_time_steps = len(trial_time)
     neuronal_pref_dir = np.zeros((par['n_hidden'],  par['num_rules'], num_time_steps))
-    synaptic_pref_dir = np.zeros((par['n_hidden'],  par['num_rules'], num_time_steps))
     neuronal_pev = np.zeros((par['n_hidden'],  par['num_rules'], num_time_steps))
-    synaptic_pev = np.zeros((par['n_hidden'],  par['num_rules'], num_time_steps))
-
-    """
-    The synaptic efficacy is the product of syn_x and syn_u, will decode sample
-    direction from this value
-    """
-    syn_efficacy = syn_x*syn_u
 
     if par['trial_type'] == 'ABBA' or par['trial_type'] == 'ABCA':
         """
@@ -420,36 +374,27 @@ def calculate_sample_tuning(h, syn_x, syn_u, sample, rule, match, trial_time):
                 neuronal_pev[n,r,t] = 1 - mse/(response_var+1e-9)
                 neuronal_pref_dir[n,r,t] = np.arctan2(weights[2,0],weights[1,0])
 
-                # Synaptic sample tuning
-                weights = np.linalg.lstsq(sample_dir[ind,:], syn_efficacy[n,t,ind])
-                weights = np.reshape(weights[0],(3,1))
-                pred_err = syn_efficacy[n,t,ind] - np.dot(sample_dir[ind,:], weights).T
-                mse = np.mean(pred_err**2)
-                response_var = np.var(syn_efficacy[n,t,ind])
-                synaptic_pev[n,r,t] = 1 - mse/(response_var+1e-9)
-                synaptic_pref_dir[n,r,t] = np.arctan2(weights[2,0],weights[1,0])
 
-    return neuronal_pref_dir, neuronal_pev, synaptic_pref_dir, synaptic_pev
+    return neuronal_pref_dir, neuronal_pev
 
-
-def run_model(x, y, hidden_init, syn_x_init, syn_u_init, weights):
+def run_model(x, y, hidden_init, weights):
 
     """
     Run the reccurent network
     History of hidden state activity stored in self.hidden_state_hist
     """
-    hidden_state_hist = rnn_cell_loop(x, hidden_init, syn_x_init, syn_u_init, weights)
+    hidden_state_hist = rnn_cell_loop(x, hidden_init, weights)
 
     """
     Network output
     Only use excitatory projections from the RNN to the output layer
     """
-    y_hat = [np.dot(np.maximum(0,weights['w_out']), h) + weights['b_out'] for h in hidden_state_hist]
+    y_hat = [np.dot(weights['w_out'], h) + weights['b_out'] for h in hidden_state_hist]
 
     return y_hat, hidden_state_hist
 
 
-def rnn_cell_loop(x_unstacked, h, syn_x, syn_u, weights):
+def rnn_cell_loop(x_unstacked, h, weights):
 
     hidden_state_hist = []
 
@@ -457,78 +402,24 @@ def rnn_cell_loop(x_unstacked, h, syn_x, syn_u, weights):
     Loop through the neural inputs to the RNN, indexed in time
     """
     for rnn_input in x_unstacked:
-        h, syn_x, syn_u = rnn_cell(np.squeeze(rnn_input), h, syn_x, syn_u, weights)
+        h = rnn_cell(np.squeeze(rnn_input), h, weights)
         hidden_state_hist.append(h)
 
     return hidden_state_hist
 
-def rnn_cell(rnn_input, h, syn_x, syn_u, weights):
-
-    if par['EI']:
-        # ensure excitatory neurons only have postive outgoing weights,
-        # and inhibitory neurons have negative outgoing weights
-        W_rnn_effective = np.dot(np.maximum(0,weights['w_rnn']), par['EI_matrix'])
-    else:
-        W_rnn_effective = weights['w_rnn']
-
+def rnn_cell(rnn_input, h, weights):
 
     """
-    Update the synaptic plasticity paramaters
+    h = tf.nn.relu(h*(1-par['alpha_neuron']) \
+        + par['alpha_neuron']*(tf.matmul(W_in, rnn_input) + tf.matmul(self.WY, h) + b_rnn) \
+        + tf.random_normal([par['n_hidden'], par['batch_train_size']], 0, par['noise_rnn'], dtype=tf.float32))
     """
-    if par['synapse_config'] == 'std_stf':
-        # implement both synaptic short term facilitation and depression
-        syn_x += par['alpha_std']*(1-syn_x) - par['dt_sec']*syn_u*syn_x*h
-        syn_u += par['alpha_stf']*(par['U']-syn_u) + par['dt_sec']*par['U']*(1-syn_u)*h
-        syn_x = np.minimum(1, np.maximum(0, syn_x))
-        syn_u = np.minimum(1, np.maximum(0, syn_u))
-        h_post = syn_u*syn_x*h
+    h = np.maximum(0,np.dot(weights['w_in'], rnn_input) + np.dot(weights['w_rnn'], h) + weights['b_rnn'] \
+        +  np.random.normal(0, par['noise_rnn'],size=(par['n_hidden'], h.shape[1])))
 
-    elif par['synapse_config'] == 'std':
-        # implement synaptic short term derpression, but no facilitation
-        # we assume that syn_u remains constant at 1
-        syn_x += par['alpha_std']*(1-syn_x) - par['dt_sec']*syn_x*h
-        syn_x = np.minimum(1, np.maximum(0, syn_x))
-        h_post = syn_x*h
 
-    elif par['synapse_config'] == 'stf':
-        # implement synaptic short term facilitation, but no depression
-        # we assume that syn_x remains constant at 1
-        syn_u += par['alpha_stf']*(par['U']-syn_u) + par['dt_sec']*par['U']*(1-syn_u)*h
-        syn_u = np.minimum(1, np.maximum(0, syn_u))
-        h_post = syn_u*h
+    return h
 
-    else:
-        # no synaptic plasticity
-        h_post = h
-
-    """
-    Update the hidden state
-    All needed rectification has already occured
-    """
-
-    h = np.maximum(0, h*(1-par['alpha_neuron'])
-                   + par['alpha_neuron']*(np.dot(np.maximum(0,weights['w_in']), np.maximum(0, rnn_input))
-                   + np.dot(W_rnn_effective, h_post) + weights['b_rnn'])
-                   + np.random.normal(0, par['noise_rnn'],size=(par['n_hidden'], h.shape[1])))
-
-    return h, syn_x, syn_u
-
-def downsample_activity(h, syn_x, syn_u, target_dt = 10):
-
-    # downsample activity
-    df = target_dt//par['dt']
-    if df > 1:
-        rng = range(0,h.shape[1], df)
-        h = h[:, rng, :]
-        syn_x = syn_x[:, rng, :]
-        syn_u = syn_u[:, rng, :]
-    elif df < 1:
-        print('Cannot sample at higher temproal resolution!!!')
-        quit()
-
-    trial_time = np.arange(0,h.shape[1]*target_dt, target_dt)
-
-    return h, syn_x, syn_u, trial_time
 
 
 def get_perf(y, y_hat, mask):
