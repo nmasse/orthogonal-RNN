@@ -22,7 +22,8 @@ def analyze_model(trial_info, y_hat, h, model_performance, weights):
     Lesion weights
     """
     print('Lesioning weights...')
-    accuracy_rnn_start, accuracy_rnn_test, accuracy_out = lesion_weights(trial_info, h_stacked, weights)
+    accuracy_rnn_start, accuracy_rnn_test, accuracy_out,  lesion_neuronal_decoding, lesion_neuronal_pref_dir = \
+        lesion_weights(trial_info, h_stacked, weights)
 
     """
     Calculate neuronal and synaptic sample motion tuning
@@ -51,7 +52,12 @@ def analyze_model(trial_info, y_hat, h, model_performance, weights):
         'model_performance': model_performance,
         'parameters': par,
         'weights': weights,
-        'trial_time': trial_time}
+        'trial_time': trial_time,
+        'accuracy_rnn_start':accuracy_rnn_start,
+        'accuracy_rnn_test': accuracy_rnn_test,
+        'accuracy_out':accuracy_out,
+        'lesion_neuronal_decoding': lesion_neuronal_decoding,
+        'lesion_neuronal_pref_dir': lesion_neuronal_pref_dir}
 
     save_fn = par['save_dir'] + par['save_fn']
     pickle.dump(results, open(save_fn, 'wb') )
@@ -182,13 +188,13 @@ def calc_svm(lin_clf, y, conds, train_ind, test_ind):
 def lesion_weights(trial_info, h, weights):
 
     N = weights['w_rnn'].shape[0]
-    num_reps = 10
+    num_reps = 3
     accuracy_rnn_start = np.ones((N,N), dtype=np.float32)
     accuracy_rnn_test = np.ones((N,N), dtype=np.float32)
     accuracy_out = np.ones((3,N), dtype=np.float32)
     trial_time = np.arange(0,h.shape[1]*par['dt'], par['dt'])
 
-    neuronal_decoding = np.zeros((N,N,par['num_rules'], num_reps, len(trial_time)))
+    neuronal_decoding = np.zeros((N,N, par['num_rules'], num_reps, len(trial_time)))
     neuronal_pref_dir = np.zeros((N,N,par['n_hidden'],  par['num_rules'],  len(trial_time)))
     neuronal_pev = np.zeros((N,N,par['n_hidden'],  par['num_rules'],  len(trial_time)))
 
@@ -199,14 +205,10 @@ def lesion_weights(trial_info, h, weights):
     y = trial_info['desired_output']
     train_mask = trial_info['train_mask']
 
-
-    test_onset = 1
-    hidden_init = h[:,test_onset-1,:]
-
+    hidden_init = h[:,0,:]
 
     test_onset = (par['dead_time']+par['fix_time']+par['sample_time']+par['delay_time'])//par['dt']
     hidden_init_test = h[:,test_onset-1,:]
-
 
     x_test = np.split(trial_info['neural_input'][:,test_onset:,:],trial_length-test_onset,axis=1)
     y_test = trial_info['desired_output'][:,test_onset:,:]
@@ -221,9 +223,6 @@ def lesion_weights(trial_info, h, weights):
     for n1 in range(3):
         for n2 in range(N):
 
-            if weights['w_out'][n1,n2] <= 0:
-                continue
-
             # lesion weights
             q = np.ones((3,N))
             q[n1,n2] = 0
@@ -236,33 +235,29 @@ def lesion_weights(trial_info, h, weights):
     for n1 in range(N):
         for n2 in range(N):
 
-            if weights['w_rnn'][n1,n2] <= 0:
-                continue
-
             # lesion weights
             q = np.ones((N,N))
             q[n1,n2] = 0
             weights_new['w_rnn'] = weights['w_rnn']*q
 
-            # simulate network
-            y_hat, hidden_state_hist = run_model(x, y, hidden_init, weights_new)
-            accuracy_rnn_start[n1,n2] = get_perf(y, y_hat, train_mask)
-
             y_hat, hidden_state_hist = run_model(x_test, y_test, hidden_init_test, weights_new)
             accuracy_rnn_test[n1,n2] = get_perf(y_test, y_hat, train_mask_test)
 
-            if accuracy_rnn_start[n1,n2] < -1:
+            y_hat, hidden_state_hist = run_model(x, y, hidden_init, weights_new)
+            accuracy_rnn_start[n1,n2] = get_perf(y, y_hat, train_mask)
+
+            if accuracy_rnn_start[n1,n2] < 0.9:
 
                 h_stacked = np.stack(hidden_state_hist, axis=1)
 
-                neuronal_decoding[n1,n2,:,:,:], _ = calculate_svms(h_stacked, trial_info['sample'], \
+                neuronal_decoding[n1,n2,:,:] = calculate_svms(h_stacked, trial_info['sample'], \
                     trial_info['rule'], trial_info['match'], trial_time, num_reps = num_reps)
 
-                neuronal_pref_dir[n1,n2,:,:], neuronal_pev[n1,n2,:,:], _, _ = calculate_sample_tuning(h_stacked, \
+                neuronal_pref_dir[n1,n2,:,:], neuronal_pev[n1,n2,:,:] = calculate_sample_tuning(h_stacked, \
                     trial_info['sample'], trial_info['rule'], trial_info['match'], trial_time)
 
 
-    return accuracy_rnn_start, accuracy_rnn_test, accuracy_out
+    return accuracy_rnn_start, accuracy_rnn_test, accuracy_out, neuronal_decoding, neuronal_pref_dir
 
 
 def simulate_network(trial_info, h, weights, num_reps = 20):
