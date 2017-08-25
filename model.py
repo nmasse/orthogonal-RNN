@@ -52,7 +52,7 @@ class Model:
         Network output
         Only use excitatory projections from the RNN to the output layer
         """
-        self.y_hat = [tf.matmul(tf.nn.relu(W_out),h)+b_out for h in self.hidden_state_hist]
+        self.y_hat = [tf.matmul(W_out,h)+b_out for h in self.hidden_state_hist]
 
 
     def rnn_cell_loop(self, x_unstacked, h):
@@ -61,7 +61,7 @@ class Model:
         Initialize weights and biases
         """
         with tf.variable_scope('rnn_cell'):
-            W_in = tf.get_variable('W_in', initializer = par['w_in0'], trainable=True)
+            W_in = tf.get_variable('W_in', initializer = par['w_in0'], trainable=False)
             U = tf.get_variable('U', initializer = par['u0'], trainable=True)
             b_rnn = tf.get_variable('b_rnn', initializer = par['b_rnn0'], trainable=True)
 
@@ -136,6 +136,8 @@ class Model:
 
         self.perf_loss = tf.reduce_mean(tf.stack(perf_loss, axis=0))
         self.spike_loss = tf.reduce_mean(tf.stack(spike_loss, axis=0))
+
+        #self.wiring_loss = 0.5*tf.reduce_mean(tf.square(self.WY))
 
 
         self.loss = self.perf_loss + self.spike_loss
@@ -257,7 +259,6 @@ def main():
                         model.WY], {x: input_data, y: target_data, mask: train_mask})
 
                 accuracy[j] = analysis.get_perf(target_data, y_hat, train_mask)
-                print((np.sum(np.abs(W_rnn))), np.sum(np.abs(W_rnn-W_rnn.T)))
 
             iteration_time = time.time() - t_start
             model_performance = append_model_performance(model_performance, accuracy, loss, perf_loss, spike_loss, (i+1)*N, iteration_time)
