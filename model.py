@@ -1,6 +1,10 @@
 """
 Nicolas Masse 2017
 Contributions from Gregory Grant, Catherine Lee
+
+Orthogonal RNN based on https://arxiv.org/abs/1612.00188
+Efficient Orthogonal Parametrisation of Recurrent Neural Networks Using Householder Reflections
+Zakaria Mhammedi, Andrew Hellicar, Ashfaqur Rahman, James Bailey, 2016
 """
 
 import tensorflow as tf
